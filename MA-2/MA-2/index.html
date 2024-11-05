@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Geospatial Visualizations - Population and Gini Index</title>
+    <script src="libs/d3.js"></script>
+    <script src="libs/d3jstopojson.v1.js"></script>
+    <style>
+        /* Page Styling */
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 0;
+        }
+
+        h1, h3 {
+            text-align: center;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        svg {
+            border: 1px solid #ccc;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        #tooltip {
+            position: absolute;
+            opacity: 0;
+            background: white;
+            padding: 10px;
+            font-size: 12px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            pointer-events: none;
+        }
+
+        path {
+            stroke-width: .5px;
+            stroke: black;
+        }
+
+        path:hover {
+            opacity: .7;
+            stroke: black;
+            stroke-width: 2px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Geospatial Visualizations of Massachusetts Population and Gini Index</h1>
+    <h3>Vishnu Vardhan Reddy Mule</h3>
+    <div id="tooltip"></div>
+    <div class="container">
+        <div id="mapA" class="map">
+            <h3 style="color: #0d89ee;">Population in 1980</h3>
+        </div> <!-- MAP A: Population in 1980 -->
+        <div id="mapB" class="map">
+            <h3 style="color: #0d89ee;">Population Change (1980-2010)</h3>
+        </div> <!-- MAP B: Population Change (1980-2010) -->
+        <div id="mapC" class="map">
+            <h3 style="color: #0d89ee;">Gini Index by County (2019)</h3>
+        </div> <!-- MAP C: Gini Index by County (2019) -->
+    </div>
+
+    <script>
+        const svgWidth = 800;
+        const svgHeight = 500;
+
+        const MA_counties = "./data/towns.topojson";
+        const gini_index = "./data/gini_index.csv";
+
+        Promise.all([d3.json(MA_counties), d3.csv(gini_index)]).then(data => {
+            const topology_data = data[0];
+            const gini_data = data[1];
+            const geojson = topojson.feature(topology_data, topology_data.objects.ma);
+            
+
+            const tooltip = d3.select("#tooltip");
+
+            /* --- MAP A: Population in 1980 --- */
+            createMap("#mapA", geojson, "POP1980", d3.interpolateBlues, "Population in 1980");
+
+            /* --- MAP B: Population Change (1980-2010) --- */
+            createMap("#mapB", geojson, d => d.properties.POP2010 - d.properties.POP1980, d3.interpolateRdYlGn, "Population Change (1980-2010)");
+
+            /* --- MAP C: Gini Index by County (2019) --- */
+            createMap("#mapC", geojson, "Gini2019", d3.interpolateRdYlGn, "Gini Index (2019)", gini_data);
+
+            function createMap(containerId, geojson, property, colorScheme, tooltipText, additionalData = null) {
+    console.log("Creating map for:", containerId);
+
+    const svg = d3.select(containerId)
+        .append("svg")
+        .attr("width", svgWidth)
+        .attr("height", svgHeight);
+
+    const projection = d3.geoMercator().fitSize([svgWidth, svgHeight], geojson);
+    const path = d3.geoPath().projection(projection);
+
+    let colorScale;
+    let giniByCounty = {};
+
+    if (additionalData) {
+        // Gini Index data and group by county ID
+        additionalData.forEach(d => {
+            const countyID = d.id.slice(-5);
+            if (!giniByCounty[countyID]) {
+                giniByCounty[countyID] = [];
+            }
+            giniByCounty[countyID].push({ year: +d.year, gini: +d['Estimate!!Gini Index'] });
+        });
+
+        // Gini index values for color coding
+        const gini2019 = additionalData.filter(d => d.year === "2019");
+        const giniValues = gini2019.map(d => +d['Estimate!!Gini Index']);
+
+        colorScale = d3.scaleSequential(colorScheme)
+            .domain([d3.min(giniValues), d3.max(giniValues)]);
+    } else {
+        const values = geojson.features.map(d => {
+            const value = typeof property === 'function' ? property(d) : d.properties[property];
+            return value !== undefined ? value : 0; // Default to 0 if the property is undefined
+        });
+
+        colorScale = d3.scaleSequential(colorScheme).domain(d3.extent(values));
+    }
+
+    const tooltip = d3.select("#tooltip")
+        .style("position", "absolute")
+        .style("opacity", 0)
+        .style("background-color", "white")
+        .style("border", "1px solid black")
+        .style("padding", "10px")
+        .style("border-radius", "6px")
+        .style("pointer-events", "none");
+
+    svg.selectAll("path")
+        .data(geojson.features)
+        .enter().append("path")
+        .attr("d", path)
+        .attr("fill", d => {
+            if (additionalData) {
+                const countyID = d.properties.FIPS_STCO;
+                const giniIndex = giniByCounty[countyID]?.find(entry => entry.year === 2019)?.gini;
+                return giniIndex ? colorScale(giniIndex) : "#ccc";
+            } else {
+                const value = typeof property === 'function' ? property(d) : d.properties[property];
+                return value !== undefined ? colorScale(value) : "#ccc"; // Default color if the property is undefined
+            }
+        })
+        .on("mouseenter", (event, d) => {
+            if (additionalData) {
+                const countyID = d.properties.FIPS_STCO;
+                const giniEntries = giniByCounty[countyID] || [];
+                const countyName = d.properties.COUNTY || d.properties.NAME || d.properties.COUNTY_NAME || d.properties.TOWN || "Unknown County";
+
+                giniEntries.sort((a, b) => a.year - b.year);
+
+                if (giniEntries.length) {
+                    tooltip.html(`<strong>County:</strong> ${countyName}<br><strong>Gini Index Trend:</strong>`)
+                        .style("left", `${event.pageX + 10}px`)
+                        .style("top", `${event.pageY + 10}px`)
+                        .transition().duration(200).style("opacity", 0.9);
+
+                    const chartWidth = 250;
+                    const chartHeight = 150;
+                    const chartMargin = { top: 20, right: 20, bottom: 40, left: 40 };
+
+                    const xScale = d3.scaleBand()
+                        .domain(giniEntries.map(d => d.year))
+                        .range([chartMargin.left, chartWidth - chartMargin.right])
+                        .padding(0.1);
+
+                    const yScale = d3.scaleLinear()
+                        .domain([d3.min(giniEntries, d => d.gini), d3.max(giniEntries, d => d.gini)])
+                        .nice()
+                        .range([chartHeight - chartMargin.bottom, chartMargin.top]);
+
+                    const line = d3.line()
+                        .x(d => xScale(d.year) + xScale.bandwidth() / 2)
+                        .y(d => yScale(d.gini));
+
+                    const chartSVG = tooltip.append("svg")
+                        .attr("width", chartWidth)
+                        .attr("height", chartHeight);
+
+                    chartSVG.append("g")
+                        .attr("transform", `translate(0,${chartHeight - chartMargin.bottom})`)
+                        .call(d3.axisBottom(xScale).tickFormat(d3.format("d")))
+                        .selectAll("text")
+                        .style("text-anchor", "end")
+                        .attr("dx", "-0.8em")
+                        .attr("dy", "0.15em")
+                        .attr("transform", "rotate(-40)");
+
+                    chartSVG.append("g")
+                        .attr("transform", `translate(${chartMargin.left},0)`)
+                        .call(d3.axisLeft(yScale).ticks(5));
+
+                    chartSVG.append("path")
+                        .datum(giniEntries)
+                        .attr("fill", "none")
+                        .attr("stroke", "#762a83")
+                        .attr("stroke-width", 2)
+                        .attr("d", line);
+
+                    chartSVG.selectAll("circle")
+                        .data(giniEntries)
+                        .enter().append("circle")
+                        .attr("cx", d => xScale(d.year) + xScale.bandwidth() / 2)
+                        .attr("cy", d => yScale(d.gini))
+                        .attr("r", 3)
+                        .attr("fill", "#11111")
+                        .append("title")
+                        .text(d => `Year ${d.year}: ${d.gini.toFixed(3)}`);
+                } else {
+                    tooltip.html(`<strong>County:</strong> ${countyName}<br>No Gini Index data available.`)
+                        .style("left", `${event.pageX + 10}px`)
+                        .style("top", `${event.pageY + 10}px`)
+                        .transition().duration(200).style("opacity", 0.9);
+                }
+            } else {
+                const value = typeof property === 'function' ? property(d) : d.properties[property];
+                tooltip.html(`<strong>${tooltipText}:</strong> ${value}`)
+                    .style("left", `${event.pageX + 10}px`)
+                    .style("top", `${event.pageY + 10}px`)
+                    .transition().duration(200).style("opacity", 0.9);
+            }
+        })
+        .on("mousemove", event => {
+            tooltip.style("left", `${event.pageX + 10}px`).style("top", `${event.pageY + 10}px`);
+        })
+        .on("mouseleave", () => {
+            tooltip.transition().duration(400).style("opacity", 0);
+            tooltip.html("");
+        });
+}
+        });
+    </script>
+</body>
+</html>
